@@ -27,7 +27,7 @@ iptv-ultra/
 │
 ├── src/
 │   ├── backend/                   # Backend services
-│   │   ├── iptv-ultra.sh         # Main control script
+│   │   ��── iptv-ultra.sh         # Main control script
 │   │   ├── iptv-probe.py         # FFmpeg testing engine
 │   │   ├── channel-aggregator.py # Channel deduplication
 │   │   ├── country-filter.py     # Country-based filtering
