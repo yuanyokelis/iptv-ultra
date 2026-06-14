@@ -1,0 +1,37 @@
+# Build artifacts
+*.o
+*.a
+*.so
+*.ipk
+*.apk
+build/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Runtime
+*.log
+*.pid
+/output/
+/cache/
+/tmp/
+
+# Generated files
+*.m3u
+*.xml
+/etc/config/iptv-ultra.generated
