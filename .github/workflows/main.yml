@@ -1,54 +1,9 @@
-name: Build OpenWrt Package
+- name: Debug
+  run: |
+    echo "==== FILES ===="
+    find files -type f
 
-on:
-  push:
-    branches: [ "main" ]
-  workflow_dispatch:
+    echo "==== BUILD ===="
+    find ipk_build -type f
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Package IPK/APK
-        run: |
-          # 1. 创建标准的打包目录结构
-          mkdir -p ipk_build/CONTROL
-          
-          # 2. 生成 ipk 必需的控制信息文件
-          cat <<EOF > ipk_build/CONTROL/control
-          Package: luci-app-iptv-ultra
-          Version: 1.0.0-1
-          Architecture: all
-          Maintainer: IPTV Developer
-          Depends: python3, ffmpeg, ffprobe
-          Description: IPTV Ultra Pro system for OpenWrt
-          EOF
-          
-          # 3. 安全检查并复制你的业务脚本文件
-          if [ -d "files" ]; then
-            cp -r files/* ipk_build/
-          else
-            echo "错误：没有在你的 GitHub 仓库根目录找到 files 文件夹！请检查你的 GitHub Desktop 是否上传成功。"
-            exit 1
-          fi
-          
-          # 4. 使用 Linux 自带的 tar 命令直接封包，不依赖外部环境
-          tar -czf control.tar.gz -C ipk_build/CONTROL .
-          rm -rf ipk_build/CONTROL
-          tar -czf data.tar.gz -C ipk_build .
-          echo "2.0" > debian-binary
-          
-          # 5. 合成最终的 ipk 安装包
-          tar -czf luci-app-iptv-ultra_1.0.0_all.ipk debian-binary control.tar.gz data.tar.gz
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: luci-app-iptv-ultra-packages
-          path: "*.ipk"
+    ls -lh
