@@ -1,4 +1,4 @@
-name: Build OpenWrt Package
+name: Build IPTV Ultra
 
 on:
   push:
@@ -7,14 +7,35 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Show files
+      - name: Show Repository
         run: |
-          pwd
-          ls -R
+          echo "===== REPO ====="
+          find .
+
+      - name: Check Files
+        run: |
+          echo "===== FILES ====="
+          find files -type f
+
+      - name: Build Package
+        run: |
+          mkdir -p ipk_build
+          cp -rv files/* ipk_build/
+
+          echo "===== BUILD DIR ====="
+          find ipk_build
+
+          tar -czf data.tar.gz -C ipk_build .
+
+          ls -lh data.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debug-package
+          path: data.tar.gz
