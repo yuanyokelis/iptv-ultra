@@ -1,9 +1,0 @@
-- name: Debug
-  run: |
-    echo "==== FILES ===="
-    find files -type f
-
-    echo "==== BUILD ===="
-    find ipk_build -type f
-
-    ls -lh
