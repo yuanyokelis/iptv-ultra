@@ -1,37 +1,223 @@
-#!/bin/sh /etc/rc.common
+#!/bin/sh
+# IPTV Ultra Pro - Main Control Script
+# Usage: /usr/bin/iptv-ultra <command> [options]
 
-START=99
-USE_PROCD=1
+PROG="IPTV Ultra Pro"
+VERSION="2.0.0"
+PYTHON="/usr/bin/python3"
+PROBE="/usr/bin/iptv-probe.py"
+CONFIG="/etc/config/iptv-ultra"
+WWW_DIR="/www/iptv"
 
-extra_command "update" "执行实时更新及测速"
-extra_command "clear_cache" "清理无效及缓存文件"
+usage() {
+    cat <<EOF
+$PROG v$VERSION
 
-update() {
-    echo "[*] IPTV Ultra Pro: Starting stream updates..."
-    # 运行高性能 Python 测速引擎
-    /usr/bin/python3 /usr/bin/iptv-probe.py
-    echo "[*] IPTV Ultra Pro: Update finished."
+Usage: /usr/bin/iptv-ultra <command> [options]
+
+Commands:
+  update         Full update: download -> probe -> aggregate -> output
+    -c CN HK ..    Country codes (space separated)
+    -s hot|latency|resolution  Sort method
+    -t NUM         Probe threads (default: 20)
+    -m NUM         Min score 0-100 (default: 60)
+
+  status         Show current status (JSON)
+
+  clear          Clear cache and output files
+
+  list-countries List supported country codes
+
+  regen          Regenerate output files from cached results
+
+  help           Show this help
+
+Examples:
+  /usr/bin/iptv-ultra update -c cn hk tw -s hot -t 30
+  /usr/bin/iptv-ultra status
+EOF
 }
 
-clear_cache() {
-    rm -rf /www/iptv/*.m3u
-    rm -rf /www/iptv/epg.xml
-    uci set iptv-ultra.runtime.total_channels='0'
-    uci set iptv-ultra.runtime.success_rate='0%'
-    uci commit iptv-ultra
-    echo "[*] IPTV Ultra Pro: Cache cleared."
+# Ensure dependencies exist
+check_deps() {
+    local missing=""
+    command -v "$PYTHON" >/dev/null 2>&1 || missing="$missing python3"
+    command -v ffmpeg >/dev/null 2>&1 || missing="$missing ffmpeg"
+    if [ -n "$missing" ]; then
+        echo "[!] Missing dependencies:$missing"
+        echo "    Install: opkg install$missing"
+        echo "    Or:      apk add$missing"
+        exit 1
+    fi
 }
 
-# Procd 系统守护进程（可选，用于保持 HTTP 静态路径链接可用性）
-start_service() {
-    config_load 'iptv-ultra'
-    config_get_bool enabled 'global' 'enabled' 0
-    [ "$enabled" -eq 1 ] || return 0
-
-    procd_open_instance
-    procd_set_param command /bin/true
-    procd_close_instance
-    
-    # 建立软链接，确保 HTTP 可达性 (如果 uhttpd 默认根目录是 /www)
-    [ -d "/www/iptv" ] || mkdir -p /www/iptv
+# Ensure www dir exists
+ensure_www() {
+    [ -d "$WWW_DIR" ] || mkdir -p "$WWW_DIR"
 }
+
+# Apply cron job
+apply_cron() {
+    local enabled
+    local cron_time
+    if [ -f "$CONFIG" ]; then
+        enabled=$(grep -oE "option enabled\s+'([^']+)" "$CONFIG" 2>/dev/null | cut -d"'" -f2)
+        cron_time=$(grep -oE "option update_time\s+'([^']+)" "$CONFIG" 2>/dev/null | cut -d"'" -f2)
+    fi
+    enabled="${enabled:-1}"
+    cron_time="${cron_time:-0 3 * * *}"
+
+    # Remove existing iptv-ultra cron entries
+    sed -i '/iptv-ultra/d' /etc/crontabs/root 2>/dev/null
+
+    if [ "$enabled" = "1" ]; then
+        echo "$cron_time /usr/bin/iptv-ultra update >/dev/null 2>&1" >> /etc/crontabs/root
+        echo "[*] Cron installed: $cron_time"
+    fi
+    /etc/init.d/cron restart 2>/dev/null || crond -b 2>/dev/null || true
+}
+
+# ─── Commands ────────────────────────────────────────────────────────────────
+
+cmd_update() {
+    check_deps
+    ensure_www
+    echo "[*] $PROG: Starting update..."
+    # Write config if not exists
+    if [ ! -f "$CONFIG" ]; then
+        mkdir -p "$(dirname "$CONFIG")"
+        cat > "$CONFIG" << 'CONFEOF'
+config iptv-ultra 'global'
+    option enabled '1'
+    list countries 'cn'
+    list countries 'hk'
+    list countries 'tw'
+    option sort_by 'hot'
+    option max_threads '30'
+    option min_score '60'
+    option auto_update '1'
+    option update_time '0 3 * * *'
+
+config status 'runtime'
+    option total_channels '0'
+    option success_rate '0%'
+    option failed_today '0'
+    option avg_latency '0ms'
+CONFEOF
+    fi
+
+    # Build args
+    PY_ARGS="update"
+    for a in "$@"; do
+        PY_ARGS="$PY_ARGS $a"
+    done
+
+    $PYTHON $PROBE $PY_ARGS
+    RC=$?
+    if [ $RC -eq 0 ]; then
+        # Update UCI runtime status
+        if [ -f /tmp/iptv-ultra-status.json ]; then
+            local total
+            local rate
+            local failed
+            local latency
+            total=$(grep -oE '"total_channels": ([0-9]+)' /tmp/iptv-ultra-status.json 2>/dev/null | cut -d: -f2 | tr -d ' ')
+            rate=$(grep -oE '"success_rate": "([^"]+)"' /tmp/iptv-ultra-status.json 2>/dev/null | cut -d'"' -f4)
+            failed=$(grep -oE '"failed_today": ([0-9]+)' /tmp/iptv-ultra-status.json 2>/dev/null | cut -d: -f2 | tr -d ' ')
+            latency=$(grep -oE '"avg_latency": "([^"]+)"' /tmp/iptv-ultra-status.json 2>/dev/null | cut -d'"' -f4)
+
+            if command -v uci >/dev/null 2>&1; then
+                uci set iptv-ultra.runtime.total_channels="${total:-0}"
+                uci set iptv-ultra.runtime.success_rate="${rate:-0%}"
+                uci set iptv-ultra.runtime.failed_today="${failed:-0}"
+                uci set iptv-ultra.runtime.avg_latency="${latency:-0ms}"
+                uci commit iptv-ultra
+            fi
+        fi
+        echo "[*] $PROG: Update complete!"
+    else
+        echo "[!] $PROG: Update failed (exit code $RC)"
+    fi
+    return $RC
+}
+
+cmd_status() {
+    if [ -f /tmp/iptv-ultra-status.json ]; then
+        cat /tmp/iptv-ultra-status.json
+    else
+        echo '{"status": "no_data", "message": "Run update first"}'
+    fi
+}
+
+cmd_clear() {
+    echo "[*] Clearing cache and outputs..."
+    rm -f /tmp/iptv-ultra-cache.json
+    rm -f /tmp/iptv-ultra-status.json
+    rm -f "$WWW_DIR"/*.m3u "$WWW_DIR"/epg.xml "$WWW_DIR"/status.json 2>/dev/null
+    if command -v uci >/dev/null 2>&1; then
+        uci set iptv-ultra.runtime.total_channels='0'
+        uci set iptv-ultra.runtime.success_rate='0%'
+        uci set iptv-ultra.runtime.failed_today='0'
+        uci set iptv-ultra.runtime.avg_latency='0ms'
+        uci commit iptv-ultra
+    fi
+    echo "[*] Done."
+}
+
+cmd_regen() {
+    ensure_www
+    if [ -f /tmp/iptv-ultra-cache.json ]; then
+        echo "[*] Regenerating output from cache..."
+        $PYTHON $PROBE update --cache-only 2>/dev/null || {
+            # If the Python script doesn't support --cache-only, just re-run update
+            # with a flag that tells it to skip probing
+            $PYTHON $PROBE update --sort-by hot 2>/dev/null || cmd_update
+        }
+    else
+        echo "[!] No cache found. Run update first."
+    fi
+}
+
+# ─── Main Dispatch ───────────────────────────────────────────────────────────
+
+# No args -> show status or help
+if [ $# -eq 0 ]; then
+    if [ -f "$WWW_DIR/best.m3u" ]; then
+        cmd_status
+    else
+        usage
+    fi
+    exit 0
+fi
+
+CMD="$1"
+shift
+
+case "$CMD" in
+    update)
+        cmd_update "$@"
+        ;;
+    status)
+        cmd_status
+        ;;
+    clear|clear_cache)
+        cmd_clear
+        ;;
+    regen|regen)
+        cmd_regen
+        ;;
+    list-countries)
+        $PYTHON $PROBE list-countries
+        ;;
+    cron|apply_cron)
+        apply_cron
+        ;;
+    help|--help|-h)
+        usage
+        ;;
+    *)
+        echo "[!] Unknown command: $CMD"
+        usage
+        exit 1
+        ;;
+esac

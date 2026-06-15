@@ -1,32 +1,93 @@
 #!/bin/sh /etc/rc.common
 
 START=99
+STOP=10
 
-boot() {
-    # 路由器开机时，若开启自动更新则写入 crontab
-    apply_cron
-}
+USE_PROCD=1
 
-apply_cron() {
-    sed -i '/iptv-ultra/d' /etc/crontabs/root 2>/dev/null
-    
-    local enabled
-    local cron_time
-    config_load iptv-ultra
-    config_get enabled global enabled 0
-    config_get cron_time global update_time '0 3 * * *'
-    
-    if [ "$enabled" -eq 1 ]; then
-        echo "$cron_time /usr/bin/iptv-ultra update" >> /etc/crontabs/root
-    fi
-    /etc/init.d/cron restart
-}
+IPTV_BIN="/usr/bin/iptv-ultra"
+PROBE="/usr/bin/iptv-probe.py"
+CONFIG="/etc/config/iptv-ultra"
+WWW_DIR="/www/iptv"
+
+EXTRA_COMMANDS="update clear_cache regen status cron"
+EXTRA_HELP="    update       Execute full update (download/probe/output)
+    clear_cache  Clear all cache and output files
+    regen        Regenerate output from cached results
+    status       Show current status
+    cron         Re-apply cron job"
 
 start() {
-    apply_cron
+    local enabled
+    config_load iptv-ultra
+    config_get_bool enabled global enabled 0
+
+    if [ "$enabled" = "1" ]; then
+        echo "[*] IPTV Ultra Pro: Starting service..."
+        # Ensure www directory
+        [ -d "$WWW_DIR" ] || mkdir -p "$WWW_DIR"
+
+        # Apply cron schedule
+        apply_cron
+
+        echo "[*] IPTV Ultra Pro: Service started"
+    fi
 }
 
 stop() {
+    echo "[*] IPTV Ultra Pro: Stopping service..."
+    # Remove cron
     sed -i '/iptv-ultra/d' /etc/crontabs/root 2>/dev/null
-    /etc/init.d/cron restart
+    /etc/init.d/cron restart 2>/dev/null || true
+    echo "[*] IPTV Ultra Pro: Service stopped"
+}
+
+restart() {
+    stop
+    start
+}
+
+boot() {
+    start
+}
+
+apply_cron() {
+    # Remove existing iptv-ultra cron entries
+    sed -i '/iptv-ultra/d' /etc/crontabs/root 2>/dev/null
+
+    local enabled cron_time
+    config_load iptv-ultra
+    config_get_bool enabled global enabled 0
+    config_get cron_time global update_time '0 3 * * *'
+
+    if [ "$enabled" = "1" ] && [ -n "$cron_time" ]; then
+        echo "$cron_time $IPTV_BIN update >/dev/null 2>&1" >> /etc/crontabs/root
+        echo "[*] IPTV Ultra Pro: Cron installed: $cron_time"
+    fi
+    /etc/init.d/cron restart 2>/dev/null || crond -b 2>/dev/null || true
+}
+
+# Service commands
+update() {
+    "$IPTV_BIN" update "$@"
+}
+
+clear_cache() {
+    "$IPTV_BIN" clear
+}
+
+regen() {
+    "$IPTV_BIN" regen
+}
+
+status() {
+    "$IPTV_BIN" status
+}
+
+cron() {
+    apply_cron
+}
+
+start_service() {
+    start
 }

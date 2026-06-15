@@ -35,3 +35,7 @@ htmlcov/
 *.m3u
 *.xml
 /etc/config/iptv-ultra.generated
+
+# IPTV Ultra runtime
+/tmp/iptv-ultra-*/
+/www/iptv/
