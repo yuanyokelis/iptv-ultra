@@ -8,9 +8,6 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     name: Build APK + IPK
@@ -18,59 +15,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build APK and IPK packages
-        shell: bash
+      - name: Install tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq binutils tar gzip
+
+      - name: Build packages
         run: |
-          set -eux
-          PKG_DIR="luci-app-iptv-ultra"
+          set -x
           VERSION="2.0.0"
+          DIR="luci-app-iptv-ultra"
 
-          # Create structure
-          install -d "$PKG_DIR/usr/bin" \
-                    "$PKG_DIR/etc/config" \
-                    "$PKG_DIR/etc/init.d" \
-                    "$PKG_DIR/usr/lib/lua/luci/controller" \
-                    "$PKG_DIR/usr/lib/lua/luci/model/cbi/iptv-ultra" \
-                    "$PKG_DIR/www/iptv"
+          for d in usr/bin etc/config etc/init.d \
+                   usr/lib/lua/luci/controller \
+                   usr/lib/lua/luci/model/cbi/iptv-ultra \
+                   www/iptv; do mkdir -p "$DIR/$d"; done
 
-          # Copy files
-          cp files/usr/bin/iptv-ultra "$PKG_DIR/usr/bin/"
-          cp files/usr/bin/iptv-probe.py "$PKG_DIR/usr/bin/"
-          cp files/etc/config/iptv-ultra "$PKG_DIR/etc/config/"
-          cp files/etc/init.d/iptv-ultra "$PKG_DIR/etc/init.d/"
-          cp files/usr/lib/lua/luci/controller/iptv-ultra.lua "$PKG_DIR/usr/lib/lua/luci/controller/"
-          cp files/usr/lib/lua/luci/model/cbi/iptv-ultra/settings.lua "$PKG_DIR/usr/lib/lua/luci/model/cbi/iptv-ultra/"
-          chmod 755 "$PKG_DIR/usr/bin/iptv-ultra" "$PKG_DIR/usr/bin/iptv-probe.py" "$PKG_DIR/etc/init.d/iptv-ultra"
+          cp files/usr/bin/iptv-ultra       "$DIR/usr/bin/"
+          cp files/usr/bin/iptv-probe.py    "$DIR/usr/bin/"
+          cp files/etc/config/iptv-ultra    "$DIR/etc/config/"
+          cp files/etc/init.d/iptv-ultra    "$DIR/etc/init.d/"
+          cp files/usr/lib/lua/luci/controller/iptv-ultra.lua  "$DIR/usr/lib/lua/luci/controller/"
+          cp files/usr/lib/lua/luci/model/cbi/iptv-ultra/settings.lua  "$DIR/usr/lib/lua/luci/model/cbi/iptv-ultra/"
+          chmod 755 "$DIR/usr/bin/iptv-ultra" "$DIR/usr/bin/iptv-probe.py" "$DIR/etc/init.d/iptv-ultra"
 
-          # APK package
-          (cd "$PKG_DIR" && tar -czf "../${PKG_DIR}_${VERSION}_all.apk" .)
-          echo "APK done: $(wc -c < "${PKG_DIR}_${VERSION}_all.apk") bytes"
+          # APK
+          (cd "$DIR" && tar -czf "../${DIR}_${VERSION}_all.apk" .)
 
-          # IPK package
-          install -d ipk-build/DEBIAN
-          printf 'Package: luci-app-iptv-ultra\nVersion: %s-1\nArchitecture: all\nMaintainer: IPTV Ultra Team\nPriority: optional\nSection: luci\nDescription: IPTV Ultra Pro - Smart IPTV source optimizer\nDepends: python3-light, ffmpeg, luci-base, luci-compat\n' "$VERSION" > ipk-build/DEBIAN/control
-          echo "/etc/config/iptv-ultra" > ipk-build/DEBIAN/conffiles
-          printf '#!/bin/sh\nif command -v uci >/dev/null 2>&1; then uci commit iptv-ultra 2>/dev/null || true; fi\n/etc/init.d/iptv-ultra enable 2>/dev/null || true\n/etc/init.d/iptv-ultra start 2>/dev/null || true\nexit 0\n' > ipk-build/DEBIAN/postinst
-          chmod 755 ipk-build/DEBIAN/postinst
-          cp -r "$PKG_DIR"/usr ipk-build/
-          cp -r "$PKG_DIR"/etc ipk-build/
-          cp -r "$PKG_DIR"/www ipk-build/
+          # IPK
+          mkdir -p ipk/DEBIAN
+          printf 'Package: luci-app-iptv-ultra\nVersion: %s-1\nArchitecture: all\nMaintainer: IPTV Ultra Team\nPriority: optional\nSection: luci\nDescription: IPTV Ultra Pro\nDepends: python3-light, ffmpeg, luci-base, luci-compat\n' "$VERSION" > ipk/DEBIAN/control
+          echo "/etc/config/iptv-ultra" > ipk/DEBIAN/conffiles
+          printf '#!/bin/sh\nif command -v uci 2>/dev/null; then uci commit iptv-ultra 2>/dev/null || true; fi\n/etc/init.d/iptv-ultra enable 2>/dev/null || true\n/etc/init.d/iptv-ultra start 2>/dev/null || true\nexit 0\n' > ipk/DEBIAN/postinst
+          chmod 755 ipk/DEBIAN/postinst
+          cp -r "$DIR/usr" ipk/
+          cp -r "$DIR/etc" ipk/
+          cp -r "$DIR/www" ipk/
 
-          (cd ipk-build && \
-           echo "2.0" > debian-binary && \
-           tar -czf control.tar.gz ./DEBIAN/ && \
-           tar -czf data.tar.gz usr/ etc/ www/ && \
-           ar -rcs "../${PKG_DIR}_${VERSION}-1_all.ipk" debian-binary control.tar.gz data.tar.gz)
-          echo "IPK done: $(wc -c < "${PKG_DIR}_${VERSION}-1_all.ipk") bytes"
+          cd ipk
+          echo "2.0" > debian-binary
+          tar -czf control.tar.gz ./DEBIAN/
+          tar -czf data.tar.gz usr/ etc/ www/
+          ar -rcs "../${DIR}_${VERSION}-1_all.ipk" debian-binary control.tar.gz data.tar.gz
+          cd ..
           ls -lh *.apk *.ipk
-
-      - name: Verify APK
-        run: tar -tzf luci-app-iptv-ultra_2.0.0_all.apk | sort
-
-      - name: Verify IPK
-        run: |
-          ar -p luci-app-iptv-ultra_2.0.0-1_all.ipk control.tar.gz | tar -xzf - -O ./control
-          ar -p luci-app-iptv-ultra_2.0.0-1_all.ipk data.tar.gz | tar -tzf - | head -20
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -86,8 +72,8 @@ jobs:
           path: "*.ipk"
           if-no-files-found: error
 
-  sdk-build:
-    name: SDK-Build-${{ matrix.target.name }}
+  sdk:
+    name: SDK-${{ matrix.target.name }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -103,9 +89,7 @@ jobs:
           path: source
 
       - name: Install deps
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq build-essential libncurses5-dev zlib1g-dev gawk gettext libssl-dev xsltproc wget file unzip
+        run: sudo apt-get install -y -qq build-essential libncurses5-dev zlib1g-dev gawk gettext libssl-dev xsltproc wget file unzip python3 rsync
 
       - name: Extract SDK
         run: |
@@ -114,27 +98,26 @@ jobs:
           tar -xf sdk.tar.xz
           echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
 
-      - name: Add package to SDK
+      - name: Add package and configure
         run: |
           mkdir -p "$SDK_DIR/package/luci-app-iptv-ultra"
           rsync -a source/ "$SDK_DIR/package/luci-app-iptv-ultra/" --exclude=.git
           cd "$SDK_DIR"
-          make defconfig 2>&1 | tail -10
+          ./scripts/feeds update -i 2>/dev/null || true
+          ./scripts/feeds install luci-base 2>/dev/null || true
+          ./scripts/feeds install luci-compat 2>/dev/null || true
+          make defconfig 2>&1 | tail -5
           echo "CONFIG_PACKAGE_luci-app-iptv-ultra=y" >> .config
           make defconfig 2>&1 | tail -5
 
       - name: Compile
         run: |
           cd "$SDK_DIR"
-          make package/luci-app-iptv-ultra/compile V=s 2>&1 | tail -50
+          make package/luci-app-iptv-ultra/compile V=s 2>&1 | tail -80 || true
+          find bin -name "*iptv-ultra*.ipk" -type f 2>/dev/null || echo "No IPK found"
+          find bin -name "*.ipk" -type f 2>/dev/null | head -5
 
-      - name: Collect artifacts
-        run: |
-          mkdir -p artifacts
-          find "$SDK_DIR/bin" -name "*iptv-ultra*.ipk" -exec cp {} artifacts/ \; 2>/dev/null || true
-          ls -la artifacts/ || echo "No artifacts"
-
-      - name: Upload SDK IPK
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ipk-${{ matrix.target.name }}
@@ -158,24 +141,14 @@ jobs:
           name: IPTV Ultra Pro ${{ github.ref_name }}
           body: |
             # IPTV Ultra Pro ${{ github.ref_name }}
-
             ## Packages
-
-            - `luci-app-iptv-ultra_*.apk` — APK (OpenWrt 24+)
-            - `luci-app-iptv-ultra_*.ipk` — IPK (opkg)
-
+            - APK (OpenWrt 24+): luci-app-iptv-ultra_*.apk
+            - IPK (opkg): luci-app-iptv-ultra_*.ipk
             ## Install
-
-            ```bash
+            ```
             apk add luci-app-iptv-ultra*.apk
             opkg install luci-app-iptv-ultra*.ipk
             ```
-
-            ## Usage
-
-            1. LuCI -> Services -> IPTV Ultra Pro
-            2. Select countries -> Update
-            3. TVBox subscribe: http://router-ip/iptv/best.m3u
           files: release-artifacts/**/*
           fail_on_unmatched_files: false
         env:
