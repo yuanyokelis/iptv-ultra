@@ -1,5 +1,4 @@
 name: Build & Release IPTV Ultra Pro
-
 on:
   push:
     branches: [ main, master ]
@@ -8,225 +7,180 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
-    inputs:
-      openwrt_sdk:
-        description: 'OpenWrt SDK URL'
-        required: false
-        default: 'https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.xz'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  build-apk-ipk:
-    name: Build APK/IPK packages
+  build:
+    name: Build APK + IPK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Build APK and IPK packages
+        shell: bash
+        run: |
+          set -eux
+          PKG_DIR="luci-app-iptv-ultra"
+          VERSION="2.0.0"
+
+          # Create structure
+          install -d "$PKG_DIR/usr/bin" \
+                    "$PKG_DIR/etc/config" \
+                    "$PKG_DIR/etc/init.d" \
+                    "$PKG_DIR/usr/lib/lua/luci/controller" \
+                    "$PKG_DIR/usr/lib/lua/luci/model/cbi/iptv-ultra" \
+                    "$PKG_DIR/www/iptv"
+
+          # Copy files
+          cp files/usr/bin/iptv-ultra "$PKG_DIR/usr/bin/"
+          cp files/usr/bin/iptv-probe.py "$PKG_DIR/usr/bin/"
+          cp files/etc/config/iptv-ultra "$PKG_DIR/etc/config/"
+          cp files/etc/init.d/iptv-ultra "$PKG_DIR/etc/init.d/"
+          cp files/usr/lib/lua/luci/controller/iptv-ultra.lua "$PKG_DIR/usr/lib/lua/luci/controller/"
+          cp files/usr/lib/lua/luci/model/cbi/iptv-ultra/settings.lua "$PKG_DIR/usr/lib/lua/luci/model/cbi/iptv-ultra/"
+          chmod 755 "$PKG_DIR/usr/bin/iptv-ultra" "$PKG_DIR/usr/bin/iptv-probe.py" "$PKG_DIR/etc/init.d/iptv-ultra"
+
+          # APK package
+          (cd "$PKG_DIR" && tar -czf "../${PKG_DIR}_${VERSION}_all.apk" .)
+          echo "APK done: $(wc -c < "${PKG_DIR}_${VERSION}_all.apk") bytes"
+
+          # IPK package
+          install -d ipk-build/DEBIAN
+
+          printf 'Package: luci-app-iptv-ultra\nVersion: %s-1\nArchitecture: all\nMaintainer: IPTV Ultra Team\nPriority: optional\nSection: luci\nDescription: IPTV Ultra Pro - Smart IPTV source optimizer\nDepends: python3-light, python3-urllib, ffmpeg, luci-base, luci-compat\n' "$VERSION" > ipk-build/DEBIAN/control
+
+          echo "/etc/config/iptv-ultra" > ipk-build/DEBIAN/conffiles
+
+          printf '#!/bin/sh\nif command -v uci >/dev/null 2>&1; then uci commit iptv-ultra 2>/dev/null || true; fi\n/etc/init.d/iptv-ultra enable 2>/dev/null || true\n/etc/init.d/iptv-ultra start 2>/dev/null || true\nexit 0\n' > ipk-build/DEBIAN/postinst
+          chmod 755 ipk-build/DEBIAN/postinst
+
+          cp -r "$PKG_DIR"/usr ipk-build/
+          cp -r "$PKG_DIR"/etc ipk-build/
+          cp -r "$PKG_DIR"/www ipk-build/
+
+          (cd ipk-build && \
+           echo "2.0" > debian-binary && \
+           tar -czf control.tar.gz ./DEBIAN/ && \
+           tar -czf data.tar.gz usr/ etc/ www/ && \
+           ar -rcs "../${PKG_DIR}_${VERSION}-1_all.ipk" debian-binary control.tar.gz data.tar.gz)
+          echo "IPK done: $(wc -c < "${PKG_DIR}_${VERSION}-1_all.ipk") bytes"
+          ls -lh *.apk *.ipk
+
+      - name: Verify APK
+        run: tar -tzf luci-app-iptv-ultra_2.0.0_all.apk | sort
+
+      - name: Verify IPK
+        run: |
+          ar -p luci-app-iptv-ultra_2.0.0-1_all.ipk control.tar.gz | tar -xzf - -O ./control
+          ar -p luci-app-iptv-ultra_2.0.0-1_all.ipk data.tar.gz | tar -tzf - | head -20
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4.2.2
+        with:
+          name: luci-app-iptv-ultra-apk
+          path: "*.apk"
+          if-no-files-found: error
+
+      - name: Upload IPK
+        uses: actions/upload-artifact@v4.2.2
+        with:
+          name: luci-app-iptv-ultra-ipk
+          path: "*.ipk"
+          if-no-files-found: error
+
+  sdk-build:
+    name: SDK-Build-${{ matrix.target.name }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         target:
-          - name: x86_64
+          - name: x86-64
             sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/x86/64/openwrt-sdk-24.10.0-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.xz
-            packages_arch: x86_64
-
-          - name: aarch64_cortex-a53
+          - name: aarch64
             sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/armsr/armv8/openwrt-sdk-24.10.0-armsr-armv8_gcc-13.3.0_musl.Linux-x86_64.tar.xz
-            packages_arch: aarch64_cortex-a53
-
-          - name: mipsel_24kc
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/ramips/mt7621/openwrt-sdk-24.10.0-ramips-mt7621_gcc-13.3.0_musl.Linux-x86_64.tar.xz
-            packages_arch: mipsel_24kc
-
-          - name: arm_cortex-a7_neon-vfpv4
-            sdk_url: https://downloads.openwrt.org/releases/24.10.0/targets/sunxi/cortexa7/openwrt-sdk-24.10.0-sunxi-cortexa7_gcc-13.3.0_musl.Linux-x86_64.tar.xz
-            packages_arch: arm_cortex-a7_neon-vfpv4
-
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
         with:
           path: source
 
-      - name: Install system deps
+      - name: Install deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq build-essential libncurses5-dev \
-            zlib1g-dev gawk git gettext libssl-dev xsltproc wget python3 file
+          sudo apt-get install -y -qq build-essential libncurses5-dev zlib1g-dev gawk gettext libssl-dev xsltproc wget file unzip
 
-      - name: Download and extract SDK
+      - name: Extract SDK
         run: |
-          SDK_URL="${{ matrix.target.sdk_url }}"
-          SDK_FILE="sdk.tar.xz"
-          echo "Downloading SDK from: $SDK_URL"
-          wget -q "$SDK_URL" -O "$SDK_FILE"
-          echo "Extracting SDK..."
-          tar -xf "$SDK_FILE"
-          # Find the SDK directory
-          SDK_DIR=$(tar -tf "$SDK_FILE" | head -1 | cut -d'/' -f1)
-          echo "SDK_DIR=$SDK_DIR" >> $GITHUB_ENV
+          wget -q "${{ matrix.target.sdk_url }}" -O sdk.tar.xz
+          SDK_DIR=$(tar -tf sdk.tar.xz | head -1 | cut -d/ -f1)
+          tar -xf sdk.tar.xz
+          echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
 
-      - name: Setup package in SDK
+      - name: Add package to SDK
         run: |
-          # Create package directory in SDK
           mkdir -p "$SDK_DIR/package/luci-app-iptv-ultra"
-          # Copy source files
-          cp -r source/* "$SDK_DIR/package/luci-app-iptv-ultra/"
-          # Ensure files directory exists
-          ls -la "$SDK_DIR/package/luci-app-iptv-ultra/files/"
+          rsync -a source/ "$SDK_DIR/package/luci-app-iptv-ultra/" --exclude=.git
+          cd "$SDK_DIR"
+          make defconfig 2>&1 | tail -10
+          echo "CONFIG_PACKAGE_luci-app-iptv-ultra=y" >> .config
+          make defconfig 2>&1 | tail -5
 
-      - name: Build IPK package
+      - name: Compile
         run: |
           cd "$SDK_DIR"
-          # Select package
-          echo "CONFIG_PACKAGE_luci-app-iptv-ultra=y" >> .config
-          make defconfig
-          # Build the package
-          make package/luci-app-iptv-ultra/compile V=s -j$(nproc) 2>&1 | tail -100
-          # Find built package
-          echo "=== Built packages ==="
-          find bin/packages/ -name "*iptv-ultra*" -type f 2>/dev/null || true
-          find bin/targets/ -name "*iptv-ultra*" -type f 2>/dev/null || true
+          make package/luci-app-iptv-ultra/compile V=s 2>&1 | tail -50
 
-      - name: Collect IPK artifacts
+      - name: Collect artifacts
         run: |
-          mkdir -p artifacts/ipk
-          find "$SDK_DIR/bin/" -name "*iptv-ultra*.ipk" -exec cp -v {} artifacts/ipk/ \; 2>/dev/null || true
-          echo "=== Artifacts ==="
-          ls -la artifacts/ipk/ 2>/dev/null || echo "No ipk files found"
+          mkdir -p artifacts
+          find "$SDK_DIR/bin" -name "*iptv-ultra*.ipk" -exec cp {} artifacts/ \; 2>/dev/null || true
+          ls -la artifacts/ || echo "No artifacts"
 
-      - name: Upload IPK artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload SDK IPK
+        uses: actions/upload-artifact@v4.2.2
         with:
           name: ipk-${{ matrix.target.name }}
-          path: artifacts/ipk/
-          if-no-files-found: ignore
-
-  build-apk-direct:
-    name: Build APK package (direct)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Create APK package structure
-        run: |-
-          PKG_DIR="luci-app-iptv-ultra"
-          mkdir -p "$PKG_DIR/usr/bin"
-          mkdir -p "$PKG_DIR/etc/config"
-          mkdir -p "$PKG_DIR/etc/init.d"
-          mkdir -p "$PKG_DIR/usr/lib/lua/luci/controller"
-          mkdir -p "$PKG_DIR/usr/lib/lua/luci/model/cbi/iptv-ultra"
-          mkdir -p "$PKG_DIR/www/iptv"
-          mkdir -p "$PKG_DIR/etc/apk/triggers"
-
-          cp -r files/usr/bin/* "$PKG_DIR/usr/bin/"
-          cp files/etc/config/iptv-ultra "$PKG_DIR/etc/config/"
-          cp files/etc/init.d/iptv-ultra "$PKG_DIR/etc/init.d/"
-          cp files/usr/lib/lua/luci/controller/iptv-ultra.lua "$PKG_DIR/usr/lib/lua/luci/controller/"
-          cp files/usr/lib/lua/luci/model/cbi/iptv-ultra/settings.lua "$PKG_DIR/usr/lib/lua/luci/model/cbi/iptv-ultra/"
-
-          chmod 755 "$PKG_DIR/usr/bin/iptv-ultra"
-          chmod 755 "$PKG_DIR/usr/bin/iptv-probe.py"
-          chmod 755 "$PKG_DIR/etc/init.d/iptv-ultra"
-
-      - name: Create APK .apk package (tar.gz)
-        run: |-
-          PKG_DIR="luci-app-iptv-ultra"
-          VERSION="2.0.0"
-          PKG_NAME="${PKG_DIR}_${VERSION}_all"
-
-          cd "$PKG_DIR"
-          tar -czf "../${PKG_NAME}.apk" .
-          cd ..
-          echo "=== APK package created ==="
-          ls -la *.apk
-
-          mkdir -p ipk-build/DEBIAN
-          printf '%s\n' \
-            'Package: luci-app-iptv-ultra' \
-            'Version: 2.0.0-1' \
-            'Architecture: all' \
-            'Maintainer: IPTV Ultra Team' \
-            'Description: IPTV Ultra Pro - Smart IPTV source optimizer' \
-            ' Automatic IPTV source fetching, FFmpeg-based quality testing,' \
-            ' intelligent aggregation, and optimized playlist generation.' \
-            'Depends: python3-light, python3-urllib, ffmpeg, ffprobe, luci-base, luci-compat' \
-            > ipk-build/DEBIAN/control
-
-          cp -r "$PKG_DIR"/* ipk-build/
-          cd ipk-build
-          echo "2.0" > debian-binary
-          tar -czf control.tar.gz ./DEBIAN/control
-          tar -czf data.tar.gz usr/ etc/ www/
-          ar -rc "../${PKG_DIR}_2.0.0-1_all.ipk" debian-binary control.tar.gz data.tar.gz
-          cd ..
-
-          echo "=== Packages ==="
-          ls -la *.apk *.ipk
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: apk-all
-          path: "*.apk"
-          if-no-files-found: ignore
-
-      - name: Upload IPK artifact (standalone)
-        uses: actions/upload-artifact@v4
-        with:
-          name: ipk-all
-          path: "*.ipk"
+          path: artifacts/
           if-no-files-found: ignore
 
   release:
     name: Create Release
-    needs: [build-apk-ipk, build-apk-direct]
+    needs: [build]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4.2.2
         with:
           path: release-artifacts
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+      - uses: softprops/action-gh-release@v2.2.1
         with:
           name: IPTV Ultra Pro ${{ github.ref_name }}
           body: |
             # IPTV Ultra Pro ${{ github.ref_name }}
 
-            ## 📦 Packages
+            ## Packages
 
-            - `luci-app-iptv-ultra_*.ipk` — 标准 IPK 包 (opkg 兼容)
-            - `luci-app-iptv-ultra_*.apk` — APK 包 (OpenWrt 24+ 新包管理系统)
+            - `luci-app-iptv-ultra_*.apk` — APK (OpenWrt 24+)
+            - `luci-app-iptv-ultra_*.ipk` — IPK (opkg)
 
-            ## 🚀 安装方式
+            ## Install
 
-            ### OpenWrt 24+ (APK)
             ```bash
             apk add luci-app-iptv-ultra*.apk
-            ```
-
-            ### 传统 OpenWrt (OPKG)
-            ```bash
             opkg install luci-app-iptv-ultra*.ipk
             ```
 
-            ## 🔧 使用方式
+            ## Usage
 
-            1. 安装后访问 LuCI: **Services → IPTV Ultra Pro**
-            2. 选择国家 (CN/HK/TW/US/JP/KR...)
-            3. 点击「一键更新并测速」
-            4. 在 TVBox/影视仓 订阅: `http://路由器IP/iptv/best.m3u`
-
-            ## ⚡ 版本亮点
-
-            - ffmpeg 多线程并发测速 (20-50线程)
-            - 自动同频道聚合 + 智能评分
-            - EPG 节目单自动同步
-            - 热度排序算法
-            - 每日定时自动更新
+            1. LuCI -> Services -> IPTV Ultra Pro
+            2. Select countries -> Update
+            3. TVBox subscribe: http://router-ip/iptv/best.m3u
           files: release-artifacts/**/*
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

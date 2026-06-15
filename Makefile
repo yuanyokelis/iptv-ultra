@@ -14,7 +14,7 @@ define Package/luci-app-iptv-ultra
   SUBMENU:=3. Applications
   TITLE:=IPTV Ultra Pro - Smart IPTV source optimizer
   URL:=https://github.com/yuanyokelis/iptv-ultra
-  DEPENDS:=+python3-light +python3-urllib +ffmpeg +ffprobe +luci-base +luci-compat
+  DEPENDS:=+python3-light +ffmpeg +ffprobe +luci-base +luci-compat
   PKGARCH:=all
   PROVIDES:=luci-app-iptv-ultra
 endef
