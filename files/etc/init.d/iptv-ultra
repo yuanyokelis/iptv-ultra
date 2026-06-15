@@ -1,0 +1,32 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+
+boot() {
+    # 路由器开机时，若开启自动更新则写入 crontab
+    apply_cron
+}
+
+apply_cron() {
+    sed -i '/iptv-ultra/d' /etc/crontabs/root 2>/dev/null
+    
+    local enabled
+    local cron_time
+    config_load iptv-ultra
+    config_get enabled global enabled 0
+    config_get cron_time global update_time '0 3 * * *'
+    
+    if [ "$enabled" -eq 1 ]; then
+        echo "$cron_time /usr/bin/iptv-ultra update" >> /etc/crontabs/root
+    fi
+    /etc/init.d/cron restart
+}
+
+start() {
+    apply_cron
+}
+
+stop() {
+    sed -i '/iptv-ultra/d' /etc/crontabs/root 2>/dev/null
+    /etc/init.d/cron restart
+}
