@@ -5,7 +5,6 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
-# 顺应 24 年新规，强制使用 Node.js 24 消除 Warning
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -16,16 +15,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup OpenWrt SDK Environment
-        run: |
-          sudo apt-get update
-          # 修正了 clan -> clang 的拼写错误，确保不会再报 exit code 100
-          sudo apt-get install -y build-essential clang gawk gettext git libncurses5-dev libssl-dev python3-distutils zlib1g-dev
-
       - name: Package IPK/APK
         run: |
+          # 1. 创建标准的打包目录结构
           mkdir -p ipk_build/CONTROL
           
+          # 2. 生成 ipk 必需的控制信息文件
           cat <<EOF > ipk_build/CONTROL/control
           Package: luci-app-iptv-ultra
           Version: 1.0.0-1
@@ -35,19 +30,21 @@ jobs:
           Description: IPTV Ultra Pro system for OpenWrt
           EOF
           
-          # 检查并确保复制路径正确
+          # 3. 安全检查并复制你的业务脚本文件
           if [ -d "files" ]; then
             cp -r files/* ipk_build/
           else
-            echo "Error: files directory not found!"
+            echo "错误：没有在你的 GitHub 仓库根目录找到 files 文件夹！请检查你的 GitHub Desktop 是否上传成功。"
             exit 1
           fi
           
+          # 4. 使用 Linux 自带的 tar 命令直接封包，不依赖外部环境
           tar -czf control.tar.gz -C ipk_build/CONTROL .
           rm -rf ipk_build/CONTROL
           tar -czf data.tar.gz -C ipk_build .
           echo "2.0" > debian-binary
           
+          # 5. 合成最终的 ipk 安装包
           tar -czf luci-app-iptv-ultra_1.0.0_all.ipk debian-binary control.tar.gz data.tar.gz
 
       - name: Upload Artifact
